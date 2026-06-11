@@ -1,0 +1,23 @@
+[Unit]
+Description=Voice Hub Orchestrator (boot check + voice pipeline)
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=exec
+User=sinabot
+WorkingDirectory=/opt/voicehub
+ExecStart=/opt/voicehub/orchestrator-venv/bin/python3 -m orchestrator.boot_check --wait --fix --start
+Restart=always
+RestartSec=10
+# Give time for boot check retries + orchestrator startup
+TimeoutStartSec=600
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voicehub-orchestrator
+# Environment
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

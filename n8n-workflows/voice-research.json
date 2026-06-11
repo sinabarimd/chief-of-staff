@@ -1,0 +1,349 @@
+{
+  "name": "Voice Hub -- Voice Research Agent",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voice-query",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "voice-query"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate auth, rate-limit, and route mode\nconst staticData = $getWorkflowStaticData('global');\nconst raw = $input.first().json;\nconst body = raw.body || raw;\nconst headers = raw.headers || {};\n\n// --- Auth check ---\nconst provided = headers['x-voice-key'];\nif (!staticData.voice_api_key || provided !== staticData.voice_api_key) {\n  return [{ json: { routed: false, error: 'Unauthorized', statusCode: 401 } }];\n}\n\n// --- Rate limit: 10/min ---\nconst now = Date.now();\nconst window = 60000;\nif (!staticData.voice_calls) staticData.voice_calls = [];\nstaticData.voice_calls = staticData.voice_calls.filter(t => t > now - window);\nif (staticData.voice_calls.length >= 10) {\n  return [{ json: { routed: false, error: 'Rate limited', retry_after: 60, statusCode: 429 } }];\n}\nstaticData.voice_calls.push(now);\n\n// --- Validate query ---\nconst query = (body.query || '').trim();\nif (!query) {\n  return [{ json: { routed: false, error: 'Missing required field: query', statusCode: 400 } }];\n}\n\n// --- Mode routing ---\nlet mode = (body.mode || 'auto').toLowerCase();\nif (mode === 'auto') {\n  const q = query.toLowerCase();\n  const researchSignals = [\n    'review', 'compare', 'latest', 'price', 'cost',\n    'news', 'what is', 'who is', 'how much', 'find',\n    'search', 'look up', 'current', 'recent', 'best',\n    'recommend', 'rating', 'difference between'\n  ];\n  mode = researchSignals.some(s => q.includes(s)) ? 'research' : 'reasoning';\n}\n\nconst sessionId = body.session_id || null;\n\n// Build OpenClaw payloads as strings (Responses API: model + input + instructions)\nconst reasonPayload = JSON.stringify({\n  model: 'openclaw',\n  input: query,\n  instructions: 'You are a voice reasoning assistant. Answer the user\\'s question directly in 2-4 conversational sentences suitable for text-to-speech. No markdown, no bullet points, no special formatting. Be clear and helpful.'\n});\n\nreturn [{\n  json: {\n    routed: true,\n    mode: mode,\n    query: query,\n    session_id: sessionId,\n    openclaw_key: staticData.openclaw_key,\n    tavily_key: staticData.tavily_key,\n    reason_payload: reasonPayload\n  }\n}];"
+      },
+      "id": "validate-route",
+      "name": "Validate & Route",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "routed-check",
+              "leftValue": "={{ $json.routed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-valid",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        620,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: true, message: $json.error }) }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode || 400 }}"
+        }
+      },
+      "id": "respond-error",
+      "name": "Respond Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        820,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "mode-check",
+              "leftValue": "={{ $json.mode }}",
+              "rightValue": "research",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "mode-switch",
+      "name": "Research?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        820,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.tavily.com/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ api_key: $('Validate & Route').first().json.tavily_key, query: $json.query, search_depth: 'basic', max_results: 5, include_answer: true }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "tavily-search",
+      "name": "Tavily Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1060,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:18789/v1/responses",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Validate & Route').first().json.openclaw_key }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-openclaw-agent-id",
+              "value": "voice-hub"
+            }
+          ]
+        },
+        "sendBody": true,
+        "options": {
+          "timeout": 20000
+        },
+        "contentType": "raw",
+        "rawContentType": "JSON",
+        "body": "={{ JSON.stringify({ model: 'openclaw', input: 'Question: ' + $('Validate & Route').first().json.query + '\\n\\nSearch results:\\n' + ($json.answer ? 'Summary: ' + $json.answer + '\\n\\n' : '') + ($json.results || []).slice(0, 3).map((r, i) => (i+1) + '. ' + r.title + ': ' + r.content).join('\\n'), instructions: 'You are a voice research assistant. The user asked a question and web search results are provided. Synthesize a clear, conversational answer in 2-4 sentences suitable for text-to-speech. No markdown, no bullet points, no URLs. If the search results are insufficient, say so honestly.' }) }}"
+      },
+      "id": "openclaw-synthesize",
+      "name": "OpenClaw Synthesize",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1280,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:18789/v1/responses",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Validate & Route').first().json.openclaw_key }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-openclaw-agent-id",
+              "value": "voice-hub"
+            }
+          ]
+        },
+        "sendBody": true,
+        "options": {
+          "timeout": 20000
+        },
+        "contentType": "raw",
+        "rawContentType": "JSON",
+        "body": "={{ $('Validate & Route').first().json.reason_payload }}"
+      },
+      "id": "openclaw-reason",
+      "name": "OpenClaw Reason",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1060,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format TTS response \u2014 handle OpenClaw Responses API output\nconst item = $input.first().json;\nconst mode = $('Validate & Route').first().json.mode;\n\nlet answer = '';\ntry {\n  // Responses API: output is array of content blocks\n  const output = item.output || [];\n  for (const block of output) {\n    if (block.type === 'message') {\n      for (const c of (block.content || [])) {\n        if (c.type === 'output_text' || c.type === 'text') {\n          answer += (c.text || '') + ' ';\n        }\n      }\n    }\n  }\n  // Fallback: direct output_text at top level\n  if (!answer.trim() && item.output_text) {\n    answer = item.output_text;\n  }\n  // Fallback: choices format\n  if (!answer.trim() && item.choices) {\n    answer = item.choices[0].message.content || '';\n  }\n} catch (e) {\n  answer = 'Sorry, I had trouble getting a response.';\n}\n\n// Strip markdown artifacts\nanswer = answer\n  .replace(/\\*\\*/g, '')\n  .replace(/\\*/g, '')\n  .replace(/#{1,6}\\s/g, '')\n  .replace(/\\[([^\\]]+)\\]\\([^)]+\\)/g, '$1')\n  .replace(/`/g, '')\n  .replace(/\\n+/g, ' ')\n  .trim();\n\n// Truncate to ~4 sentences if somehow longer\nconst sentences = answer.match(/[^.!?]+[.!?]+/g) || [answer];\nif (sentences.length > 4) {\n  answer = sentences.slice(0, 4).join(' ').trim();\n}\n\nreturn [{\n  json: {\n    answer: answer,\n    mode: mode,\n    model: (item.model || 'unknown')\n  }\n}];"
+      },
+      "id": "format-tts",
+      "name": "Format TTS Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ answer: $json.answer, mode: $json.mode, model: $json.model }) }}"
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1720,
+        200
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate & Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Route": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Research?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research?": {
+      "main": [
+        [
+          {
+            "node": "Tavily Search",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "OpenClaw Reason",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tavily Search": {
+      "main": [
+        [
+          {
+            "node": "OpenClaw Synthesize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenClaw Synthesize": {
+      "main": [
+        [
+          {
+            "node": "Format TTS Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenClaw Reason": {
+      "main": [
+        [
+          {
+            "node": "Format TTS Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format TTS Response": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "tags": []
+}

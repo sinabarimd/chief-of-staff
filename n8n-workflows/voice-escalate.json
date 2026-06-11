@@ -1,0 +1,144 @@
+{
+  "id": "voice-escalate-001",
+  "name": "Voice Escalation Relay",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voice-escalate",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "voice-escalate"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate and stamp — pure relay, no intent gating\nconst raw = $input.first().json;\nconst body = raw.body || raw;\n\nconst MAX_DEPTH = 3;\nconst RATE_LIMIT_FILE = '/var/voicehub/audit/rate_limit.json';\nconst RATE_LIMIT_PER_DAY = 50;\n\n// Required fields\nif (!body || !body.payload || !body.payload.utterance) {\n  return [{ json: { valid: false, reject_reason: 'Missing required field: payload.utterance' } }];\n}\n\n// Depth check\nconst depth = body.depth ?? 0;\nif (depth > MAX_DEPTH - 1) {\n  return [{ json: { valid: false, reject_reason: `Depth ${depth} exceeds maximum (${MAX_DEPTH - 1})` } }];\n}\n\n// Rate limiting\nconst fs = require('fs');\nconst auditDir = '/var/voicehub/audit';\nif (!fs.existsSync(auditDir)) {\n  fs.mkdirSync(auditDir, { recursive: true });\n}\nconst today = new Date().toISOString().slice(0, 10);\nlet rateData = { date: today, count: 0 };\ntry {\n  const r = fs.readFileSync(RATE_LIMIT_FILE, 'utf8');\n  rateData = JSON.parse(r);\n  if (rateData.date !== today) rateData = { date: today, count: 0 };\n} catch (e) {}\n\nif (rateData.count >= RATE_LIMIT_PER_DAY) {\n  return [{ json: { valid: false, reject_reason: `Daily rate limit reached (${RATE_LIMIT_PER_DAY}/day)` } }];\n}\n\nrateData.count++;\nfs.writeFileSync(RATE_LIMIT_FILE, JSON.stringify(rateData));\n\n// Single UUID for both message_id and job_id\nconst crypto = require('crypto');\nconst messageId = crypto.randomUUID();\n\nreturn [{\n  json: {\n    valid: true,\n    payload: body.payload,\n    source_agent: body.source_agent || 'voice',\n    idempotency_key: body.idempotency_key || null,\n    depth: depth,\n    parent_message_id: body.parent_message_id || null,\n    message_id: messageId,\n    created_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "validate",
+      "name": "Validate & Stamp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "valid-check",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-valid",
+      "name": "Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [620, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Write mailbox file — single inbox, always to notification-agent\nconst fs = require('fs');\nconst item = $input.first().json;\n\nconst inboxDir = '/var/voicehub/mailboxes/inbox';\nif (!fs.existsSync(inboxDir)) {\n  fs.mkdirSync(inboxDir, { recursive: true });\n}\n\n// Filename: ISO timestamp (file-safe) + message_id\nconst ts = item.created_at.replace(/:/g, '-').replace(/\\./g, '-');\nconst filename = `${ts}_${item.message_id}.md`;\nconst filepath = `${inboxDir}/${filename}`;\n\n// Build frontmatter + body\nlet frontmatter = `---\\nmessage_id: ${item.message_id}\\nparent_message_id: ${item.parent_message_id || 'null'}\\nfrom: voice\\nto: notification-agent\\nhop: 1\\ncreated_at: ${item.created_at}`;\nif (item.idempotency_key) {\n  frontmatter += `\\nidempotency_key: ${item.idempotency_key}`;\n}\nfrontmatter += '\\n---';\n\nconst context = item.payload.context ? JSON.stringify(item.payload.context) : 'none';\nconst content = `${frontmatter}\\n\\n**Utterance:** ${item.payload.utterance}\\n**Context:** ${context}\\n`;\n\nfs.writeFileSync(filepath, content);\n\nreturn [{ json: { ...item, mailbox_file: filepath } }];"
+      },
+      "id": "mailbox-drop",
+      "name": "Drop to Mailbox",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Append audit log entry\nconst fs = require('fs');\nconst item = $input.first().json;\n\nconst auditDir = '/var/voicehub/audit';\nif (!fs.existsSync(auditDir)) {\n  fs.mkdirSync(auditDir, { recursive: true });\n}\n\nconst entry = {\n  timestamp: item.created_at,\n  message_id: item.message_id,\n  payload_summary: item.payload.utterance.slice(0, 100),\n  source_agent: item.source_agent,\n  hop: 1,\n  target: 'notification-agent',\n  result: 'delivered'\n};\n\nfs.appendFileSync(\n  `${auditDir}/escalations.jsonl`,\n  JSON.stringify(entry) + '\\n'\n);\n\nreturn [{ json: item }];"
+      },
+      "id": "audit-log",
+      "name": "Audit Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1060, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ job_id: $json.message_id, ack_message: \"On it, I'll have that for you in a bit. Is there anything else I can help with?\" }) }}"
+      },
+      "id": "respond",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1280, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log rejection\nconst fs = require('fs');\nconst item = $input.first().json;\n\nconst auditDir = '/var/voicehub/audit';\nif (!fs.existsSync(auditDir)) {\n  fs.mkdirSync(auditDir, { recursive: true });\n}\n\nconst entry = {\n  timestamp: new Date().toISOString(),\n  message_id: null,\n  intent_type: 'unknown',\n  payload_summary: item.reject_reason,\n  source_agent: 'voice',\n  depth: null,\n  hop: null,\n  target: null,\n  result: 'rejected',\n  reason: item.reject_reason\n};\n\nfs.appendFileSync(\n  `${auditDir}/escalations.jsonl`,\n  JSON.stringify(entry) + '\\n'\n);\n\nreturn [{ json: item }];"
+      },
+      "id": "audit-reject",
+      "name": "Audit Rejection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 440]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ error: true, message: $json.reject_reason }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "respond-error",
+      "name": "Respond Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1060, 440]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [{ "node": "Validate & Stamp", "type": "main", "index": 0 }]
+      ]
+    },
+    "Validate & Stamp": {
+      "main": [
+        [{ "node": "Valid?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [{ "node": "Drop to Mailbox", "type": "main", "index": 0 }],
+        [{ "node": "Audit Rejection", "type": "main", "index": 0 }]
+      ]
+    },
+    "Drop to Mailbox": {
+      "main": [
+        [{ "node": "Audit Log", "type": "main", "index": 0 }]
+      ]
+    },
+    "Audit Log": {
+      "main": [
+        [{ "node": "Respond OK", "type": "main", "index": 0 }]
+      ]
+    },
+    "Audit Rejection": {
+      "main": [
+        [{ "node": "Respond Error", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": true,
+  "tags": [{ "name": "voice-hub" }]
+}

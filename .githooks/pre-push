@@ -29,7 +29,7 @@ check_pattern 'hf_[A-Za-z0-9]\{20,\}' "HuggingFace token"
 check_pattern 'AKIA[0-9A-Z]\{16\}' "AWS Access Key ID"
 check_pattern 'AIza[0-9A-Za-z_-]\{35\}' "Google API Key"
 check_pattern 'eyJ[A-Za-z0-9_-]\{20,\}\.' "JWT Token (generic — n8n / Voice Hub / etc.)"
-check_pattern 'X-Voice-Key' "X-Voice-Key header reference (cloud n8n voice-query)"
+check_pattern 'X-Voice-Key:[[:space:]]*[A-Za-z0-9_-]\{20,\}' "X-Voice-Key with literal key value"
 check_pattern 'sinabari@gmail\.com' "Personal email address"
 
 # Check for long hex strings that look like API keys (40+ chars)
