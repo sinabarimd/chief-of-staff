@@ -1,0 +1,33 @@
+# Defense in depth — primary control is PUBLISH_MANIFEST.md.
+
+# Secrets / local config
+.env
+*-config.js
+*credentials*
+*-token
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Source bundles (the manifest scrubs them in; the bundles themselves never push)
+voicehub_repo_bundle/
+voice-hub-*
+notification-agent-*
+
+# Build artifacts
+__pycache__/
+*.pyc
+node_modules/
+dist/
+build/
+
+# Backups
+backups/
+
+# Handoff / planning / drafts (these belong in the parent project, not here)
+*_DRAFT.*
+*handoff*
+spec_*.md
+pending_actions.md
+CLAUDE.md
