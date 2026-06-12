@@ -2,7 +2,7 @@
 
 A personal operating system for one physician-technologist: voice-first, local-first, multi-agent.
 
-This repo is the reference implementation behind [The Chief of Staff: Building a Local Voice Agent as a Personal Operating System](https://sinabarimd.com/articles/chief-of-staff-personal-operating-system.html). The article describes the architecture, the coordination protocols, the production failures, and what the system costs to run; this repo is the running code those decisions produced.
+This repo is the reference implementation behind [The Chief of Staff: Building a Local Voice Agent as a Personal Operating System](https://drsinabari.com/articles/chief-of-staff-personal-operating-system.html). The article describes the architecture, the coordination protocols, the production failures, and what the system costs to run; this repo is the running code those decisions produced.
 
 It is a *reference* implementation, not a product. The wiring is opinionated to the author's house and reading life. The point of publishing it is the design, not the deployment.
 
@@ -57,7 +57,7 @@ The five rules that survived more than one revision:
 2. **Tools are keyword-gated before the model sees them.** If your utterance contains nothing that could plausibly want a tool, the tool isn't in the model's tool list for that turn. You cannot hallucinate a tool you were never offered.
 3. **Causality chain + hop counter + idempotency keys + agent-of-record.** Four loop-prevention primitives, modeled on routing-protocol patterns, enforced independently by every agent on its own inbox plus a weekly executive sweep.
 4. **Append first, destroy after.** Write the new state, verify it, then trim the old. A crash in this order costs a duplicate; the reverse costs the data.
-5. **Surface but don't process.** The executive layer sees all eight domains and flags stuck items, but never does another agent's domain work. Cross-domain visibility, no cross-domain mutations.
+5. **Surface but don't process.** The executive layer sees all six domains and flags stuck items, but never does another agent's domain work. Cross-domain visibility, no cross-domain mutations.
 
 The article walks through how each rule was learned, usually by breaking something.
 
@@ -81,7 +81,7 @@ Configuration lives in `orchestrator/config.py` (env-driven, with sensible defau
 ## What you won't find here
 
 - The state authority (`pending_actions.md` per project, the executive Notification Agent's sync engine). That layer is the operator's house specifically and the value is in the design, not the code; see the article.
-- The eight domain agents themselves. They're Cowork projects with private context.
+- The six domain agents themselves. They're Cowork projects with private context.
 - Live state from the operator's box. The reference is the design.
 
 ## License
@@ -90,6 +90,6 @@ MIT.
 
 ## Related
 
-- Article: [The Chief of Staff: Building a Local Voice Agent as a Personal Operating System](https://sinabarimd.com/articles/chief-of-staff-personal-operating-system.html)
+- Article: [The Chief of Staff: Building a Local Voice Agent as a Personal Operating System](https://drsinabari.com/articles/chief-of-staff-personal-operating-system.html)
 - Previous spotlight: [How I Built a Personal Reputation Engine with AI Agents](https://sinabarimd.com/articles/how-i-built-a-personal-reputation-engine.html) (the system that publishes this article).
 - Author: [Dr. Sina Bari, MD](https://sinabarimd.com/about) — Stanford-trained plastic surgeon and VP of Medical AI at iMerit. Writes about medicine, technology, and building things at [sinabarimd.com](https://sinabarimd.com).
